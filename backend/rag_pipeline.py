@@ -62,10 +62,12 @@ QUIZ_PROMPT = ChatPromptTemplate.from_template("""
 You are an educational quiz generator. Create a quiz from the context below.
 {topic_note}
 Instructions:
-- Generate exactly 5 multiple-choice questions (A, B, C, D).
+- Generate exactly {num_questions} multiple-choice questions (A, B, C, D).
 - Each question must test understanding of a key concept.
 - Number each question (1., 2., …).
 - After each set of 4 options, write "Answer: [letter]" on its own line.
+- Immediately after the Answer line, write "Explanation: " followed by 1-2 sentences
+  explaining why that answer is correct, grounded only in the context.
 - Format the entire output as valid Markdown.
 
 Context:
@@ -78,7 +80,7 @@ FLASHCARDS_PROMPT = ChatPromptTemplate.from_template("""
 You are an educational flashcard creator. Create flashcards from the context below.
 {topic_note}
 Instructions:
-- Generate 8–10 flashcards covering the most important concepts, definitions, and facts.
+- Generate exactly {num_cards} flashcards covering the most important concepts, definitions, and facts.
 - Format each flashcard exactly as:
   **Q:** [question]
   **A:** [answer]
@@ -111,7 +113,7 @@ GLOSSARY_PROMPT = ChatPromptTemplate.from_template("""
 You are an educational glossary builder. Extract key terms from the context below.
 {topic_note}
 Instructions:
-- List 10–15 important terms, concepts, or names from the material.
+- List exactly {num_terms} important terms, concepts, or names from the material.
 - Format as a Markdown table with columns: **Term** | **Definition**
 - Definitions must be one clear sentence each, based only on the context.
 - Sort terms alphabetically.
@@ -367,13 +369,30 @@ def suggest_questions(filepath) -> list[str]:
     ]
 
 
-def generate_tool(tool: str, filepath, topic: str | None = None) -> str:
+# Default item counts, and the allowed range a user can request via the UI.
+TOOL_ITEM_DEFAULTS = {"quiz": 5, "flashcards": 9, "glossary": 12}
+TOOL_ITEM_MIN, TOOL_ITEM_MAX = 3, 25
+
+
+def _resolve_count(tool: str, count) -> int:
+    default = TOOL_ITEM_DEFAULTS.get(tool)
+    if default is None:
+        return 0
+    try:
+        n = int(count) if count is not None else default
+    except (TypeError, ValueError):
+        n = default
+    return max(TOOL_ITEM_MIN, min(n, TOOL_ITEM_MAX))
+
+
+def generate_tool(tool: str, filepath, topic: str | None = None, count: int | None = None) -> str:
     if tool not in TOOL_PROMPTS:
         raise ValueError(f"Unknown tool '{tool}'. Must be one of: {list(TOOL_PROMPTS)}")
     filepaths = _as_filepath_list(filepath)
     if tool == "compare" and len(filepaths) < 2:
         raise ValueError("Compare requires at least 2 sources in this chat.")
     topic = (topic or "").strip() or None
+    n = _resolve_count(tool, count)
     try:
         for fp in filepaths:
             index_document(fp)
@@ -383,7 +402,10 @@ def generate_tool(tool: str, filepath, topic: str | None = None) -> str:
         chat_model = get_chat_model(settings.llm_model)
 
         query_text = topic if topic else "key concepts, definitions, and main topics"
-        docs = _retrieve(store, query_text, filepaths, k=5, lambda_mult=0.7)
+        # Pull more context chunks when a larger item count is requested so the
+        # model has enough distinct material to draw from.
+        retrieval_k = max(5, min(n, 12)) if n else 5
+        docs = _retrieve(store, query_text, filepaths, k=retrieval_k, lambda_mult=0.7)
 
         if not docs:
             if topic:
@@ -401,11 +423,18 @@ def generate_tool(tool: str, filepath, topic: str | None = None) -> str:
         prompt = TOOL_PROMPTS[tool]
         chain = prompt | chat_model | StrOutputParser()
         return chain.invoke(
-            {"context": context, "topic_note": topic_note},
+            {
+                "context": context,
+                "topic_note": topic_note,
+                "num_questions": n,
+                "num_cards": n,
+                "num_terms": n,
+            },
             config={"callbacks": []},
         )
     except Exception:
         logger.exception(
-            "generate_tool failed (tool=%r, filepaths=%r, topic=%r)", tool, filepaths, topic
+            "generate_tool failed (tool=%r, filepaths=%r, topic=%r, count=%r)",
+            tool, filepaths, topic, count,
         )
         raise

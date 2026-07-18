@@ -63,6 +63,9 @@
           <h1 id="workspaceTitle">New chat</h1>
         </div>
         <div class="workspace-actions">
+          <button type="button" class="icon-btn" id="viewHistory" title="View past quizzes, flashcards, summaries &amp; glossaries">
+            <span class="material-symbols-outlined">history</span>
+          </button>
           <button type="button" class="icon-btn" id="clearChat" title="Clear messages">
             <span class="material-symbols-outlined">delete_sweep</span>
           </button>
@@ -214,6 +217,25 @@
     <p class="eyebrow blue" id="toolEyebrow">STUDY TOOL</p>
     <h2 id="toolTitle">Quiz</h2>
     <div id="toolContent"></div>
+  </section>
+</div>
+
+<!-- ── History Modal ──────────────────────────────────────────────── -->
+<div class="overlay" id="historyModal">
+  <section class="dialog history-dialog">
+    <button class="close" id="closeHistory">×</button>
+    <p class="eyebrow blue">HISTORY</p>
+    <h2>Past study material</h2>
+    <p class="tool-copy">Everything generated in this chat — revisit it any time.</p>
+    <div class="history-filters" id="historyFilters">
+      <button type="button" class="history-filter active" data-filter="all">All</button>
+      <button type="button" class="history-filter" data-filter="quiz">Quiz</button>
+      <button type="button" class="history-filter" data-filter="flashcards">Flashcards</button>
+      <button type="button" class="history-filter" data-filter="summary">Summary</button>
+      <button type="button" class="history-filter" data-filter="glossary">Glossary</button>
+      <button type="button" class="history-filter" data-filter="compare">Compare</button>
+    </div>
+    <div id="historyList"></div>
   </section>
 </div>
 

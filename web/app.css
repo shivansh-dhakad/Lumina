@@ -851,6 +851,36 @@ main { margin-left: var(--sidebar-w); min-height: 100vh; }
 .scope-input.hidden { display: none; }
 select.scope-input { cursor: pointer; }
 
+.count-option {
+  justify-content: space-between;
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+  cursor: default;
+}
+.count-input {
+  margin-left: 0;
+  width: 72px;
+  text-align: center;
+  padding: 8px 6px;
+}
+
+.tool-history-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 12px auto 0;
+  border: 0;
+  background: transparent;
+  color: var(--blue);
+  font: 600 12px Manrope;
+  cursor: pointer;
+  padding: 6px 10px;
+}
+.tool-history-link:hover { text-decoration: underline; }
+.tool-history-link .material-symbols-outlined { font-size: 16px; }
+
 /* Tool result area */
 .tool-result {
   padding: 30px;
@@ -939,7 +969,15 @@ select.scope-input { cursor: pointer; }
 [data-theme="dark"] .quiz-option.correct { background: #0d3325; }
 [data-theme="dark"] .quiz-option.wrong { background: #3d1015; }
 
-.quiz-feedback { margin-top: 12px; font-size: 13px; font-weight: 700; }
+.quiz-feedback { margin-top: 12px; padding: 12px 14px; border-radius: 10px; font-size: 13px; }
+.quiz-feedback.is-correct { background: #e7f8ef; }
+.quiz-feedback.is-wrong { background: #fde8e8; }
+[data-theme="dark"] .quiz-feedback.is-correct { background: #0d3325; }
+[data-theme="dark"] .quiz-feedback.is-wrong { background: #3d1015; }
+.quiz-feedback-verdict { display: block; font-weight: 700; margin-bottom: 4px; }
+.quiz-feedback.is-correct .quiz-feedback-verdict { color: var(--green); }
+.quiz-feedback.is-wrong .quiz-feedback-verdict { color: var(--red); }
+.quiz-feedback-explanation { display: block; color: var(--ink); font-weight: 500; line-height: 1.55; }
 .quiz-nav { display: flex; justify-content: space-between; margin-top: 16px; gap: 8px; }
 .quiz-nav button {
   border: 1px solid var(--line);
@@ -1040,6 +1078,62 @@ select.scope-input { cursor: pointer; }
   transition: border-color 0.15s;
 }
 .flashcard-controls button.primary { border: 0; background: var(--blue); color: #fff; }
+
+/* =============================================================================
+   History Modal
+   ============================================================================= */
+
+.history-dialog { text-align: left; }
+.history-dialog h2, .history-dialog .tool-copy { text-align: left; }
+
+.history-filters {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 16px 0;
+}
+.history-filter {
+  border: 1px solid var(--line);
+  background: var(--paper);
+  color: var(--muted);
+  border-radius: 20px;
+  padding: 6px 13px;
+  font: 600 12px Manrope;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.history-filter:hover { border-color: var(--blue); color: var(--blue); }
+.history-filter.active { border-color: var(--blue); background: var(--blue); color: #fff; }
+
+#historyList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 420px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+.history-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  border: 1px solid var(--line);
+  background: var(--wash);
+  border-radius: 12px;
+  padding: 12px 14px;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s, background 0.15s;
+}
+.history-item:hover { border-color: var(--blue); background: #f5f8ff; }
+[data-theme="dark"] .history-item:hover { background: #1e2f52; }
+.history-item > .material-symbols-outlined { color: var(--blue); font-size: 20px; flex-shrink: 0; }
+.history-item-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.history-item-body strong { font-size: 13px; color: var(--ink); }
+.history-item-body small { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-item-body .history-date { color: #9aa5ba; }
+.history-arrow { color: var(--muted); font-size: 18px; flex-shrink: 0; }
 
 /* =============================================================================
    Spinner animation

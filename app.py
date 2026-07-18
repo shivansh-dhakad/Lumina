@@ -267,8 +267,9 @@ class LuminaHandler(SimpleHTTPRequestHandler):
         if not source_paths:
             raise ValueError("Source not found. Please re-upload your document.")
         topic = str(payload.get("topic", "")).strip() or None
+        count = payload.get("count")
         from backend.rag_pipeline import generate_tool
-        return {"content": generate_tool(tool, source_paths, topic=topic)}
+        return {"content": generate_tool(tool, source_paths, topic=topic, count=count)}
 
     def _json(self, status, body):
         encoded = json.dumps(body).encode("utf-8")

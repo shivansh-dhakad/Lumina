@@ -1,17 +1,18 @@
-
 const $ = (selector) => document.querySelector(selector);
 const openModal = (el) => el.classList.add('show');
 const closeModal = (el) => el.classList.remove('show');
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const state = { chatId: '', sourceId: '', sourceName: '', chatTitle: '', sources: [], answerMode: 'normal' };
+const state = { chatId: '', sourceId: '', sourceName: '', chatTitle: '', sources: [], answerMode: 'normal', toolHistory: [] };
 let addingSource = false;
 let chatSearchQuery = '';
 let isGenerating = false;
+let historyFilter = 'all';
 
 const newChatModal = $('#newChatModal');
 const loadingModal = $('#loadingModal');
 const toolModal = $('#toolModal');
+const historyModal = $('#historyModal');
 
 marked.setOptions({ breaks: true, gfm: true });
 
@@ -22,6 +23,15 @@ $('#startChat').onclick = () => { addingSource = false; openModal(newChatModal);
 $('#addSource').onclick = () => { addingSource = true; openModal(newChatModal); };
 $('#closeNewChat').onclick = () => closeModal(newChatModal);
 $('#closeTool').onclick = () => closeModal(toolModal);
+$('#closeHistory').onclick = () => closeModal(historyModal);
+$('#viewHistory').onclick = openHistory;
+document.querySelectorAll('.history-filter').forEach((btn) => {
+  btn.onclick = () => {
+    historyFilter = btn.dataset.filter;
+    document.querySelectorAll('.history-filter').forEach((b) => b.classList.toggle('active', b === btn));
+    renderHistoryList();
+  };
+});
 $('#chooseFile').onclick = () => $('#fileInput').click();
 $('#chooseWebsite').onclick = () => {
   $('#websiteEntry').classList.remove('hidden');
@@ -109,6 +119,7 @@ async function createFileChat(file) {
       state.sourceName = result.name;
       state.chatTitle = file.name.replace(/\.[^.]+$/, '');
       state.sources = [{ sourceId: result.sourceId, name: result.name }];
+      state.toolHistory = [];
       await finishChat();
     }
   } catch (error) {
@@ -143,6 +154,7 @@ async function createPasteChat(text, title) {
       state.sourceName = name;
       state.chatTitle = name;
       state.sources = [{ sourceId: result.sourceId, name }];
+      state.toolHistory = [];
       await finishChat();
     }
   } catch (error) {
@@ -173,6 +185,7 @@ async function createWebsiteChat(url) {
       state.sourceName = result.name;
       state.chatTitle = result.name;
       state.sources = [{ sourceId: result.sourceId, name: result.name }];
+      state.toolHistory = [];
       await finishChat();
     }
   } catch (error) {
@@ -856,6 +869,24 @@ function openTool(tool) {
     .map((s) => `<option value="${escapeHtml(s.sourceId)}">${escapeHtml(s.name)}</option>`)
     .join('');
 
+  const countDefaults = { quiz: 5, flashcards: 9, glossary: 12 };
+  const countLabels = { quiz: 'Number of questions', flashcards: 'Number of flashcards', glossary: 'Number of terms' };
+  const countField = countDefaults[tool] ? `
+    <label class="scope-option count-option">
+      <span>${countLabels[tool]}</span>
+      <input type="number" id="toolCount" class="scope-input count-input"
+        min="3" max="25" value="${countDefaults[tool]}">
+    </label>
+  ` : '';
+
+  const historyCount = (state.toolHistory || []).filter((h) => h.tool === tool).length;
+  const historyLink = historyCount > 0
+    ? `<button type="button" class="tool-history-link" id="toolHistoryLink">
+        <span class="material-symbols-outlined">history</span>
+        View ${historyCount} past ${tool === 'quiz' ? 'quiz set' : tool}${historyCount === 1 ? '' : (tool === 'quiz' ? 's' : '')}
+      </button>`
+    : '';
+
   $('#toolContent').innerHTML = `
     <p class="tool-copy">Choose what to generate the ${tool} from.</p>
     <div class="tool-scope">
@@ -876,8 +907,10 @@ function openTool(tool) {
       </label>
       <input type="text" id="scopeTopic" class="scope-input hidden"
         placeholder="e.g. Neural networks, Chapter 3, photosynthesis…">
+      ${countField}
     </div>
     <button class="primary" id="generateTool">Generate ${tool}</button>
+    ${historyLink}
   `;
 
   const scopeSourceSelect = $('#scopeSource');
@@ -893,20 +926,39 @@ function openTool(tool) {
   updateScopeVisibility();
   openModal(toolModal);
   $('#generateTool').onclick = () => runTool(tool);
+  const historyLinkBtn = $('#toolHistoryLink');
+  if (historyLinkBtn) {
+    historyLinkBtn.onclick = () => {
+      closeModal(toolModal);
+      historyFilter = tool;
+      document.querySelectorAll('.history-filter').forEach((b) => b.classList.toggle('active', b.dataset.filter === tool));
+      renderHistoryList();
+      openModal(historyModal);
+    };
+  }
+}
+
+function readToolCount() {
+  const input = $('#toolCount');
+  if (!input) return null;
+  const n = parseInt(input.value, 10);
+  if (!Number.isFinite(n)) return null;
+  return Math.max(3, Math.min(n, 25));
 }
 
 function readToolScope() {
   const value = document.querySelector('input[name="toolScope"]:checked')?.value || 'all';
+  const count = readToolCount();
   if (value === 'one') {
     const sourceId = $('#scopeSource')?.value;
-    return { sourceIds: sourceId ? [sourceId] : state.sources.map((s) => s.sourceId), topic: null };
+    return { sourceIds: sourceId ? [sourceId] : state.sources.map((s) => s.sourceId), topic: null, count };
   }
   if (value === 'topic') {
     const topic = ($('#scopeTopic')?.value || '').trim();
     if (!topic) return null;
-    return { sourceIds: state.sources.map((s) => s.sourceId), topic };
+    return { sourceIds: state.sources.map((s) => s.sourceId), topic, count };
   }
-  return { sourceIds: state.sources.map((s) => s.sourceId), topic: null };
+  return { sourceIds: state.sources.map((s) => s.sourceId), topic: null, count };
 }
 
 async function runTool(tool, scope) {
@@ -927,11 +979,12 @@ async function runTool(tool, scope) {
     const response = await fetch('/api/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tool, sourceIds: scope.sourceIds, topic: scope.topic }),
+      body: JSON.stringify({ tool, sourceIds: scope.sourceIds, topic: scope.topic, count: scope.count }),
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error);
     renderToolResult(tool, result.content);
+    pushToolHistory(tool, result.content, scope);
   } catch (error) {
     $('#toolContent').innerHTML = `
       <p class="tool-error">Error: ${escapeHtml(error.message)}</p>
@@ -954,6 +1007,9 @@ function renderToolResult(tool, content) {
   if (tool === 'flashcards' && parseFlashcardsMarkdown(content).length > 0) {
     toolbar += `<button type="button" class="primary" id="toolStudy">Study flashcards</button>`;
   }
+  if (tool === 'glossary' && parseGlossaryMarkdown(content).length > 0) {
+    toolbar += `<button type="button" class="primary" id="toolStudy">Study glossary</button>`;
+  }
   toolbar += '</div>';
 
   $('#toolContent').innerHTML =
@@ -965,9 +1021,87 @@ function renderToolResult(tool, content) {
   if (studyBtn) {
     studyBtn.onclick = () => {
       if (tool === 'quiz') startQuizPlayer(parseQuizMarkdown(content));
-      else startFlashcardPlayer(parseFlashcardsMarkdown(content));
+      else if (tool === 'flashcards') startFlashcardPlayer(parseFlashcardsMarkdown(content));
+      else if (tool === 'glossary') startGlossaryPlayer(parseGlossaryMarkdown(content));
     };
   }
+}
+
+// ── Tool history (past quizzes, flashcards, summaries, glossaries) ────────
+
+function scopeLabel(scope) {
+  if (scope.topic) return `Topic: ${scope.topic}`;
+  const ids = scope.sourceIds || [];
+  if (ids.length > 1) return `All ${ids.length} sources`;
+  const match = state.sources.find((s) => s.sourceId === ids[0]);
+  return match ? match.name : state.sourceName;
+}
+
+function pushToolHistory(tool, content, scope) {
+  if (!state.toolHistory) state.toolHistory = [];
+  state.toolHistory.unshift({
+    id: `h_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    tool,
+    label: scopeLabel(scope),
+    count: scope.count || null,
+    content,
+    createdAt: Date.now(),
+  });
+  if (state.toolHistory.length > 50) state.toolHistory.length = 50;
+  persistState();
+}
+
+const TOOL_ICONS = { quiz: 'quiz', flashcards: 'style', summary: 'summarize', glossary: 'menu_book', compare: 'compare_arrows' };
+const TOOL_LABELS = { quiz: 'Quiz', flashcards: 'Flashcards', summary: 'Summary', glossary: 'Glossary', compare: 'Compare' };
+
+function openHistory() {
+  const hasSources = (state.sources && state.sources.length > 0) || state.sourceId;
+  if (!hasSources) {
+    alert('Please open a chat with a source first.');
+    return;
+  }
+  renderHistoryList();
+  openModal(historyModal);
+}
+
+function formatHistoryDate(ts) {
+  if (!ts) return '';
+  return new Date(ts).toLocaleString(undefined, {
+    month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+  });
+}
+
+function renderHistoryList() {
+  const items = (state.toolHistory || []).filter((h) => historyFilter === 'all' || h.tool === historyFilter);
+  const list = $('#historyList');
+  if (items.length === 0) {
+    list.innerHTML = `<p class="empty-recent">Nothing generated yet. Create a quiz, flashcards, summary, or glossary to see it here.</p>`;
+    return;
+  }
+  list.innerHTML = items.map((h) => `
+    <button type="button" class="history-item" data-id="${h.id}">
+      <span class="material-symbols-outlined">${TOOL_ICONS[h.tool] || 'description'}</span>
+      <span class="history-item-body">
+        <strong>${TOOL_LABELS[h.tool] || h.tool}</strong>
+        <small>${escapeHtml(h.label || '')}${h.count ? ` · ${h.count} items` : ''}</small>
+        <small class="history-date">${formatHistoryDate(h.createdAt)}</small>
+      </span>
+      <span class="material-symbols-outlined history-arrow">chevron_right</span>
+    </button>
+  `).join('');
+  list.querySelectorAll('.history-item').forEach((btn) => {
+    btn.onclick = () => openHistoryEntry(btn.dataset.id);
+  });
+}
+
+function openHistoryEntry(id) {
+  const entry = (state.toolHistory || []).find((h) => h.id === id);
+  if (!entry) return;
+  closeModal(historyModal);
+  $('#toolEyebrow').textContent = (entry.tool || '').toUpperCase();
+  $('#toolTitle').textContent = `${TOOL_LABELS[entry.tool] || entry.tool} — ${entry.label || ''}`;
+  renderToolResult(entry.tool, entry.content);
+  openModal(toolModal);
 }
 
 // ── Interactive quiz ──────────────────────────────────────────────────────
@@ -986,8 +1120,10 @@ function parseQuizMarkdown(md) {
     }
     const ansMatch = block.match(/\*\*Answer:\s*([A-D])\*\*/i)
       || block.match(/Answer:\s*([A-D])/i);
+    const expMatch = block.match(/Explanation:\s*\**\s*(.+?)(?:\n\s*\n|$)/is);
+    const explanation = expMatch ? expMatch[1].trim().replace(/\*\*/g, '').replace(/\s+/g, ' ') : '';
     if (question && Object.keys(options).length >= 2 && ansMatch) {
-      questions.push({ question, options, answer: ansMatch[1].toUpperCase() });
+      questions.push({ question, options, answer: ansMatch[1].toUpperCase(), explanation });
     }
   }
   return questions;
@@ -1049,8 +1185,11 @@ function startQuizPlayer(questions) {
         });
         const fb = $('#quizFeedback');
         fb.classList.remove('hidden');
-        fb.textContent = picked === correct ? 'Correct!' : `Incorrect — answer is ${correct}.`;
-        fb.style.color = picked === correct ? '#147b53' : '#c0392b';
+        const verdict = picked === correct ? 'Correct!' : `Incorrect — answer is ${correct}.`;
+        fb.innerHTML = `<span class="quiz-feedback-verdict">${escapeHtml(verdict)}</span>` +
+          (q.explanation ? `<span class="quiz-feedback-explanation">${escapeHtml(q.explanation)}</span>` : '');
+        fb.classList.toggle('is-correct', picked === correct);
+        fb.classList.toggle('is-wrong', picked !== correct);
         $('#quizNext').classList.remove('hidden');
       };
     });
@@ -1073,29 +1212,29 @@ function parseFlashcardsMarkdown(md) {
   return cards;
 }
 
-function startFlashcardPlayer(cards) {
+function startFlipCardPlayer(items, { unitLabel, frontLabel, backLabel }) {
   let index = 0;
   let flipped = false;
 
   const render = () => {
-    const card = cards[index];
+    const item = items[index];
     $('#toolContent').innerHTML = `
       <div class="flashcard-player">
-        <div class="quiz-progress">Card ${index + 1} of ${cards.length}</div>
+        <div class="quiz-progress">${unitLabel} ${index + 1} of ${items.length}</div>
         <div class="flashcard-container">
           <div class="flashcard${flipped ? ' flipped' : ''}" id="flashcard">
             <div class="flashcard-front">
-              <div class="flashcard-text">${escapeHtml(card.q)}</div>
+              <div class="flashcard-text">${escapeHtml(item.front)}</div>
             </div>
             <div class="flashcard-back">
-              <div class="flashcard-text">${escapeHtml(card.a)}</div>
+              <div class="flashcard-text">${escapeHtml(item.back)}</div>
             </div>
           </div>
         </div>
         <div class="flashcard-controls">
           <button type="button" id="fcPrev" ${index === 0 ? 'disabled' : ''}>Previous</button>
-          <button type="button" class="primary" id="fcFlip">${flipped ? 'Show question' : 'Show answer'}</button>
-          <button type="button" id="fcNext" ${index === cards.length - 1 ? 'disabled' : ''}>Next</button>
+          <button type="button" class="primary" id="fcFlip">${flipped ? frontLabel : backLabel}</button>
+          <button type="button" id="fcNext" ${index === items.length - 1 ? 'disabled' : ''}>Next</button>
           <button type="button" id="fcShuffle">Shuffle</button>
         </div>
       </div>
@@ -1107,7 +1246,7 @@ function startFlashcardPlayer(cards) {
     const performFlip = () => {
       flipped = !flipped;
       el.classList.toggle('flipped', flipped);
-      flipBtn.textContent = flipped ? 'Show question' : 'Show answer';
+      flipBtn.textContent = flipped ? frontLabel : backLabel;
     };
 
     el.onclick = performFlip;
@@ -1121,16 +1260,16 @@ function startFlashcardPlayer(cards) {
       }
     };
     $('#fcNext').onclick = () => {
-      if (index < cards.length - 1) {
+      if (index < items.length - 1) {
         index += 1;
         flipped = false;
         render();
       }
     };
     $('#fcShuffle').onclick = () => {
-      for (let i = cards.length - 1; i > 0; i -= 1) {
+      for (let i = items.length - 1; i > 0; i -= 1) {
         const j = Math.floor(Math.random() * (i + 1));
-        [cards[i], cards[j]] = [cards[j], cards[i]];
+        [items[i], items[j]] = [items[j], items[i]];
       }
       index = 0;
       flipped = false;
@@ -1139,6 +1278,38 @@ function startFlashcardPlayer(cards) {
   };
 
   render();
+}
+
+function startFlashcardPlayer(cards) {
+  startFlipCardPlayer(
+    cards.map((c) => ({ front: c.q, back: c.a })),
+    { unitLabel: 'Card', frontLabel: 'Show question', backLabel: 'Show answer' },
+  );
+}
+
+// ── Interactive glossary ────────────────────────────────────────────────────
+
+function parseGlossaryMarkdown(md) {
+  const terms = [];
+  const rows = md.split('\n').map((l) => l.trim()).filter((l) => l.startsWith('|'));
+  for (const row of rows) {
+    if (/^\|?\s*:?-{2,}:?\s*\|/.test(row)) continue; // separator row
+    const cells = row.split('|').map((c) => c.trim()).filter((c) => c.length > 0);
+    if (cells.length < 2) continue;
+    const term = cells[0].replace(/\*\*/g, '').trim();
+    const definition = cells.slice(1).join(' — ').replace(/\*\*/g, '').trim();
+    if (!term || !definition) continue;
+    if (/^term$/i.test(term) || /^definition$/i.test(definition)) continue; // header row
+    terms.push({ term, definition });
+  }
+  return terms;
+}
+
+function startGlossaryPlayer(terms) {
+  startFlipCardPlayer(
+    terms.map((t) => ({ front: t.term, back: t.definition })),
+    { unitLabel: 'Term', frontLabel: 'Show term', backLabel: 'Show definition' },
+  );
 }
 
 // ── Session persistence ─────────────────────────────────────────────────────
@@ -1200,6 +1371,7 @@ function persistState() {
       chatTitle: state.chatTitle,
       sources: state.sources,
       messages,
+      toolHistory: state.toolHistory || [],
     };
 
     if (existingIndex !== -1) chats[existingIndex] = chatData;
@@ -1228,6 +1400,7 @@ function restoreSession() {
     state.sourceName = activeChat.sourceName;
     state.chatTitle = activeChat.chatTitle;
     state.sources = activeChat.sources && activeChat.sources.length ? activeChat.sources : [];
+    state.toolHistory = activeChat.toolHistory || [];
 
     localStorage.setItem('sirius_active_chat_id', state.chatId);
     openWorkspace(activeChat.messages);
