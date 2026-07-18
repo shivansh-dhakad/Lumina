@@ -1,6 +1,6 @@
 # Project Architecture & Technical Reference
 
-> **SIRIUS** (formerly codenamed *Lumina*) is a fully **local**, **private** AI-powered learning assistant.
+> **LUMINA** is a fully **local**, **private** AI-powered learning assistant.
 > It lets you upload documents or paste website URLs and then chat with an AI that answers questions **grounded exclusively** in your source material — no data ever leaves your machine.
 
 ---
@@ -25,7 +25,7 @@
 
 ## 1. Project Overview
 
-SIRIUS is a **zero-cloud, zero-API-key** educational assistant. It runs entirely on the user's local machine:
+LUMINA is a **zero-cloud, zero-API-key** educational assistant. It runs entirely on the user's local machine:
 
 | Property | Value |
 |---|---|
@@ -96,7 +96,7 @@ loader.py     service.py       store.py         service.py
 ## 4. Directory Structure
 
 ```
-SIRIUS-/
+LUMINA/
 |
 +-- app.py                   # Entry point: HTTP server, API handlers, SSRF guard
 |
