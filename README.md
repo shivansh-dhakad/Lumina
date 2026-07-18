@@ -50,7 +50,7 @@ Open **http://127.0.0.1:8000** in your browser.
 
 ---
 
-## What SIRIUS Can Do
+## What LUMINA Can Do
 
 | Feature | Description |
 |---|---|
