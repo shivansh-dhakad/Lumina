@@ -15,6 +15,9 @@
 
 <div class="app-shell">
 
+  <!-- ── Mobile sidebar backdrop ──────────────────────────────────── -->
+  <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+
   <!-- ── Sidebar ──────────────────────────────────────────────────── -->
   <aside class="sidebar">
     <a class="brand" href="#"><span>✦</span>Lumina</a>
@@ -43,6 +46,9 @@
 
   <!-- ── Home page ────────────────────────────────────────────────── -->
   <main id="home">
+    <button type="button" class="mobile-menu-btn" id="mobileMenuBtnHome" aria-label="Open menu">
+      <span class="material-symbols-outlined">menu</span>
+    </button>
     <div class="home-content">
       <p class="eyebrow blue">LUMINA LEARNING</p>
       <h1>Start a conversation<br>with your sources.</h1>
@@ -58,6 +64,9 @@
 
     <header class="workspace-header">
       <div class="workspace-title-row">
+        <button type="button" class="mobile-menu-btn" id="mobileMenuBtnWorkspace" aria-label="Open menu">
+          <span class="material-symbols-outlined">menu</span>
+        </button>
         <div>
           <p class="eyebrow blue">CHAT</p>
           <h1 id="workspaceTitle">New chat</h1>
@@ -97,7 +106,13 @@
       </div>
     </header>
 
-    <div class="workspace-columns">
+    <div class="workspace-columns" id="workspaceColumns" data-active-pane="chat">
+
+      <!-- Mobile-only Source/Chat switcher -->
+      <div class="pane-switcher">
+        <button type="button" data-pane="source">Source</button>
+        <button type="button" class="active" data-pane="chat">Chat</button>
+      </div>
 
       <!-- Source Pane -->
       <section class="source-pane">

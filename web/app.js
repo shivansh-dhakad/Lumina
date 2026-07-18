@@ -68,6 +68,26 @@ $('#renameChat').onclick = () => {
 $('#exportChat').onclick = exportChat;
 $('#clearChat').onclick = clearChat;
 $('#themeToggle').onclick = toggleTheme;
+
+// ── Mobile sidebar drawer ──────────────────────────────────────────
+function toggleSidebar(force) {
+  const sidebar = document.querySelector('.sidebar');
+  const open = force ?? !sidebar.classList.contains('open');
+  sidebar.classList.toggle('open', open);
+  $('#sidebarBackdrop').classList.toggle('open', open);
+}
+$('#mobileMenuBtnHome')?.addEventListener('click', () => toggleSidebar());
+$('#mobileMenuBtnWorkspace')?.addEventListener('click', () => toggleSidebar());
+$('#sidebarBackdrop')?.addEventListener('click', () => toggleSidebar(false));
+
+// ── Mobile Source/Chat pane switcher ───────────────────────────────
+document.querySelectorAll('.pane-switcher button').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.pane-switcher button').forEach((b) => b.classList.toggle('active', b === btn));
+    $('#workspaceColumns').dataset.activePane = btn.dataset.pane;
+  });
+});
+
 document.querySelectorAll('.mode-chip').forEach((btn) => {
   btn.onclick = () => {
     state.answerMode = btn.dataset.mode;
@@ -996,35 +1016,87 @@ async function runTool(tool, scope) {
 
 function renderToolResult(tool, content) {
   const safeName = state.chatTitle.replace(/[^\w\s-]/g, '') || 'study';
+  const meta = { rawContent: content, safeName, tool };
+
+  if (tool === 'quiz') {
+    const questions = parseQuizMarkdown(content);
+    if (questions.length > 0) { startQuizPlayer(questions, meta); return; }
+  }
+  if (tool === 'flashcards') {
+    const cards = parseFlashcardsMarkdown(content);
+    if (cards.length > 0) { startFlashcardPlayer(cards, meta); return; }
+  }
+  if (tool === 'glossary') {
+    const terms = parseGlossaryMarkdown(content);
+    if (terms.length > 0) { startGlossaryPlayer(terms, meta); return; }
+  }
+
+  // Summary/compare, or a tool whose output couldn't be parsed into cards —
+  // show the raw markdown instead.
+  showRawToolResult(tool, content, safeName);
+}
+
+function showRawToolResult(tool, content, safeName) {
+  const parseable = ['quiz', 'flashcards', 'glossary'].includes(tool);
+  const parsedOk = tool === 'quiz' ? parseQuizMarkdown(content).length > 0
+    : tool === 'flashcards' ? parseFlashcardsMarkdown(content).length > 0
+    : tool === 'glossary' ? parseGlossaryMarkdown(content).length > 0
+    : false;
+
   let toolbar = `
     <div class="tool-toolbar">
       <button type="button" id="toolCopy">Copy</button>
       <button type="button" id="toolDownload">Download .md</button>
   `;
-  if (tool === 'quiz' && parseQuizMarkdown(content).length > 0) {
-    toolbar += `<button type="button" class="primary" id="toolStudy">Take quiz</button>`;
-  }
-  if (tool === 'flashcards' && parseFlashcardsMarkdown(content).length > 0) {
-    toolbar += `<button type="button" class="primary" id="toolStudy">Study flashcards</button>`;
-  }
-  if (tool === 'glossary' && parseGlossaryMarkdown(content).length > 0) {
-    toolbar += `<button type="button" class="primary" id="toolStudy">Study glossary</button>`;
-  }
+  if (parsedOk) toolbar += `<button type="button" class="primary" id="toolStudy">Open interactive view</button>`;
   toolbar += '</div>';
 
+  const notice = parseable && !parsedOk
+    ? `<p class="tool-error">Couldn't build an interactive view from this response — showing the raw text instead. Try regenerating for a cleaner result.</p>`
+    : '';
+
   $('#toolContent').innerHTML =
-    `<div class="tool-result markdown-output" id="toolMarkdown">${marked.parse(content)}</div>${toolbar}`;
+    `${notice}<div class="tool-result markdown-output" id="toolMarkdown">${marked.parse(content)}</div>${toolbar}`;
 
   $('#toolCopy').onclick = () => copyToClipboard(content);
   $('#toolDownload').onclick = () => downloadText(`${safeName}-${tool}.md`, content);
   const studyBtn = $('#toolStudy');
   if (studyBtn) {
     studyBtn.onclick = () => {
-      if (tool === 'quiz') startQuizPlayer(parseQuizMarkdown(content));
-      else if (tool === 'flashcards') startFlashcardPlayer(parseFlashcardsMarkdown(content));
-      else if (tool === 'glossary') startGlossaryPlayer(parseGlossaryMarkdown(content));
+      const meta = { rawContent: content, safeName, tool };
+      if (tool === 'quiz') startQuizPlayer(parseQuizMarkdown(content), meta);
+      else if (tool === 'flashcards') startFlashcardPlayer(parseFlashcardsMarkdown(content), meta);
+      else if (tool === 'glossary') startGlossaryPlayer(parseGlossaryMarkdown(content), meta);
     };
   }
+}
+
+// Small utility row (Copy / Download / View as text) shown above interactive players
+function toolUtilityBarHtml(meta) {
+  if (!meta || !meta.rawContent) return '';
+  return `
+    <div class="tool-util-bar">
+      <button type="button" id="toolUtilCopy" title="Copy raw text">
+        <span class="material-symbols-outlined">content_copy</span>
+      </button>
+      <button type="button" id="toolUtilDownload" title="Download .md">
+        <span class="material-symbols-outlined">download</span>
+      </button>
+      <button type="button" id="toolUtilRaw" title="View as text">
+        <span class="material-symbols-outlined">notes</span>
+      </button>
+    </div>
+  `;
+}
+
+function wireToolUtilityBar(meta) {
+  if (!meta || !meta.rawContent) return;
+  const copyBtn = $('#toolUtilCopy');
+  const downloadBtn = $('#toolUtilDownload');
+  const rawBtn = $('#toolUtilRaw');
+  if (copyBtn) copyBtn.onclick = () => copyToClipboard(meta.rawContent);
+  if (downloadBtn) downloadBtn.onclick = () => downloadText(`${meta.safeName}-${meta.tool}.md`, meta.rawContent);
+  if (rawBtn) rawBtn.onclick = () => showRawToolResult(meta.tool, meta.rawContent, meta.safeName);
 }
 
 // ── Tool history (past quizzes, flashcards, summaries, glossaries) ────────
@@ -1108,28 +1180,32 @@ function openHistoryEntry(id) {
 
 function parseQuizMarkdown(md) {
   const questions = [];
-  const blocks = md.split(/\n(?=\d+\.\s)/);
+  // Strip stray headings/code fences the model might add despite instructions
+  const cleaned = md.replace(/^#{1,6}\s.*$/gm, '').replace(/```/g, '');
+  const blocks = cleaned.split(/\n(?=\s*\d+[.)]\s)/);
   for (const block of blocks) {
-    const qMatch = block.match(/^\d+\.\s*(.+?)(?:\n|$)/s);
+    const qMatch = block.match(/^\s*\d+[.)]\s*(.+?)(?:\n|$)/s);
     if (!qMatch) continue;
     const question = qMatch[1].trim().replace(/\*\*/g, '');
+    if (!question || question.length > 300) continue;
     const options = {};
     for (const letter of ['A', 'B', 'C', 'D']) {
-      const optMatch = block.match(new RegExp(`${letter}[.)\\]\\:]\\s*(.+?)(?:\\n|$)`, 'i'));
+      const optMatch = block.match(new RegExp(`^\\s*\\**${letter}[.)\\]:]\\**\\s*(.+?)(?:\\n|$)`, 'im'));
       if (optMatch) options[letter] = optMatch[1].trim().replace(/\*\*/g, '');
     }
-    const ansMatch = block.match(/\*\*Answer:\s*([A-D])\*\*/i)
+    const ansMatch = block.match(/\*\*Answer:\**\s*([A-D])/i)
       || block.match(/Answer:\s*([A-D])/i);
     const expMatch = block.match(/Explanation:\s*\**\s*(.+?)(?:\n\s*\n|$)/is);
-    const explanation = expMatch ? expMatch[1].trim().replace(/\*\*/g, '').replace(/\s+/g, ' ') : '';
-    if (question && Object.keys(options).length >= 2 && ansMatch) {
+    const explanation = expMatch ? expMatch[1].trim().replace(/\*\*/g, '').replace(/\s+/g, ' ').slice(0, 500) : '';
+    const validOptions = Object.keys(options).filter((l) => options[l] && options[l].length <= 200);
+    if (question && validOptions.length >= 2 && ansMatch && options[ansMatch[1].toUpperCase()]) {
       questions.push({ question, options, answer: ansMatch[1].toUpperCase(), explanation });
     }
   }
   return questions;
 }
 
-function startQuizPlayer(questions) {
+function startQuizPlayer(questions, meta) {
   let index = 0;
   let score = 0;
   let answered = false;
@@ -1137,6 +1213,7 @@ function startQuizPlayer(questions) {
   const render = () => {
     if (index >= questions.length) {
       $('#toolContent').innerHTML = `
+        ${toolUtilityBarHtml(meta)}
         <div class="quiz-score">
           <h3>Done!</h3>
           <p>You scored <strong>${score} / ${questions.length}</strong></p>
@@ -1145,13 +1222,15 @@ function startQuizPlayer(questions) {
           </div>
         </div>
       `;
-      $('#quizRetry').onclick = () => startQuizPlayer(questions);
+      wireToolUtilityBar(meta);
+      $('#quizRetry').onclick = () => startQuizPlayer(questions, meta);
       return;
     }
 
     const q = questions[index];
     const letters = Object.keys(q.options).sort();
     $('#toolContent').innerHTML = `
+      ${toolUtilityBarHtml(meta)}
       <div class="quiz-player">
         <div class="quiz-progress">Question ${index + 1} of ${questions.length}</div>
         <div class="quiz-question">${escapeHtml(q.question)}</div>
@@ -1169,6 +1248,7 @@ function startQuizPlayer(questions) {
         </div>
       </div>
     `;
+    wireToolUtilityBar(meta);
 
     answered = false;
     $('#quizOptions').querySelectorAll('.quiz-option').forEach((btn) => {
@@ -1204,21 +1284,50 @@ function startQuizPlayer(questions) {
 
 function parseFlashcardsMarkdown(md) {
   const cards = [];
-  const re = /\*\*Q:\*\*\s*(.+?)\s*\*\*A:\*\*\s*(.+?)(?=\*\*Q:\*\*|$)/gs;
+  // Strip stray headings/code fences the model might add despite instructions
+  const cleaned = md.replace(/^#{1,6}\s.*$/gm, '').replace(/```/g, '');
+
+  // Primary format: **Q:** ... **A:** ... **Explain:** ... separated by --- (or the next **Q:**)
+  const boundary = /\*\*Q:\*\*/g;
+  const starts = [];
+  let bm;
+  while ((bm = boundary.exec(cleaned)) !== null) starts.push(bm.index);
+
+  for (let i = 0; i < starts.length; i += 1) {
+    const chunk = cleaned.slice(starts[i], starts[i + 1] !== undefined ? starts[i + 1] : cleaned.length);
+    const qMatch = chunk.match(/\*\*Q:\*\*\s*(.+?)(?:\n|$)/);
+    const aMatch = chunk.match(/\*\*A:\*\*\s*(.+?)(?=\n\s*\*\*Explain:\*\*|\n\s*-{3,}|$)/s);
+    const eMatch = chunk.match(/\*\*Explain:\*\*\s*(.+?)(?=\n\s*-{3,}|$)/s);
+    if (!qMatch || !aMatch) continue;
+    const q = qMatch[1].trim().replace(/\*\*/g, '');
+    const a = aMatch[1].trim().replace(/\*\*/g, '').replace(/\s+/g, ' ');
+    const explanation = eMatch ? eMatch[1].trim().replace(/\*\*/g, '').replace(/\s+/g, ' ') : '';
+    // Guard against a single match accidentally swallowing the rest of the document
+    if (!q || !a || q.length > 300 || a.length > 500 || explanation.length > 600) continue;
+    cards.push({ q, a, explanation });
+  }
+  if (cards.length > 0) return cards;
+
+  // Fallback for older/looser output: "Question: ... Answer: ..." style
+  const re2 = /Question[:\s]*\**\s*(.+?)\n[\s\S]*?Answer[:\s]*\**\s*(.+?)(?=\n\s*(?:Question|Flashcard|-{3,})|$)/gi;
   let m;
-  while ((m = re.exec(md)) !== null) {
-    cards.push({ q: m[1].trim(), a: m[2].trim() });
+  while ((m = re2.exec(cleaned)) !== null) {
+    const q = m[1].trim().replace(/\*\*/g, '');
+    const a = m[2].trim().replace(/\*\*/g, '').replace(/\s+/g, ' ');
+    if (!q || !a || q.length > 300 || a.length > 500) continue;
+    cards.push({ q, a, explanation: '' });
   }
   return cards;
 }
 
-function startFlipCardPlayer(items, { unitLabel, frontLabel, backLabel }) {
+function startFlipCardPlayer(items, { unitLabel, frontLabel, backLabel }, meta) {
   let index = 0;
   let flipped = false;
 
   const render = () => {
     const item = items[index];
     $('#toolContent').innerHTML = `
+      ${toolUtilityBarHtml(meta)}
       <div class="flashcard-player">
         <div class="quiz-progress">${unitLabel} ${index + 1} of ${items.length}</div>
         <div class="flashcard-container">
@@ -1228,6 +1337,7 @@ function startFlipCardPlayer(items, { unitLabel, frontLabel, backLabel }) {
             </div>
             <div class="flashcard-back">
               <div class="flashcard-text">${escapeHtml(item.back)}</div>
+              ${item.backExtra ? `<div class="flashcard-explain">${escapeHtml(item.backExtra)}</div>` : ''}
             </div>
           </div>
         </div>
@@ -1239,6 +1349,7 @@ function startFlipCardPlayer(items, { unitLabel, frontLabel, backLabel }) {
         </div>
       </div>
     `;
+    wireToolUtilityBar(meta);
 
     const el = $('#flashcard');
     const flipBtn = $('#fcFlip');
@@ -1280,10 +1391,11 @@ function startFlipCardPlayer(items, { unitLabel, frontLabel, backLabel }) {
   render();
 }
 
-function startFlashcardPlayer(cards) {
+function startFlashcardPlayer(cards, meta) {
   startFlipCardPlayer(
-    cards.map((c) => ({ front: c.q, back: c.a })),
+    cards.map((c) => ({ front: c.q, back: c.a, backExtra: c.explanation })),
     { unitLabel: 'Card', frontLabel: 'Show question', backLabel: 'Show answer' },
+    meta,
   );
 }
 
@@ -1299,16 +1411,18 @@ function parseGlossaryMarkdown(md) {
     const term = cells[0].replace(/\*\*/g, '').trim();
     const definition = cells.slice(1).join(' — ').replace(/\*\*/g, '').trim();
     if (!term || !definition) continue;
+    if (term.length > 120 || definition.length > 400) continue; // guard against malformed rows
     if (/^term$/i.test(term) || /^definition$/i.test(definition)) continue; // header row
     terms.push({ term, definition });
   }
   return terms;
 }
 
-function startGlossaryPlayer(terms) {
+function startGlossaryPlayer(terms, meta) {
   startFlipCardPlayer(
     terms.map((t) => ({ front: t.term, back: t.definition })),
     { unitLabel: 'Term', frontLabel: 'Show term', backLabel: 'Show definition' },
+    meta,
   );
 }
 

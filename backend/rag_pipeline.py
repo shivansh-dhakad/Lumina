@@ -63,17 +63,26 @@ You are an educational quiz generator. Create a quiz from the context below.
 {topic_note}
 Instructions:
 - Generate exactly {num_questions} multiple-choice questions (A, B, C, D).
-- Each question must test understanding of a key concept.
-- Number each question (1., 2., …).
-- After each set of 4 options, write "Answer: [letter]" on its own line.
-- Immediately after the Answer line, write "Explanation: " followed by 1-2 sentences
-  explaining why that answer is correct, grounded only in the context.
-- Format the entire output as valid Markdown.
+- Do NOT use headings (#, ##), bullet lists, or any Markdown structure other than shown below.
+- Format EVERY question EXACTLY like this example, with nothing else on those lines:
+
+1. What does a binary semaphore enforce?
+A. Deadlock between processes
+B. Mutual exclusion over a shared resource
+C. Faster memory access
+D. Process priority
+
+Answer: B
+Explanation: A binary semaphore lets only one process access the critical section at a time, preventing race conditions.
+
+- Repeat that exact block {num_questions} times total, numbered 1., 2., 3., … in order.
+- Leave one blank line between questions.
+- Base every question, option, and explanation only on the context below.
 
 Context:
 {context}
 
-Return ONLY the quiz in Markdown.
+Return ONLY the quiz in the format above. No preamble, no closing remarks, no extra commentary.
 """)
 
 FLASHCARDS_PROMPT = ChatPromptTemplate.from_template("""
@@ -81,15 +90,22 @@ You are an educational flashcard creator. Create flashcards from the context bel
 {topic_note}
 Instructions:
 - Generate exactly {num_cards} flashcards covering the most important concepts, definitions, and facts.
-- Format each flashcard exactly as:
-  **Q:** [question]
-  **A:** [answer]
+- Do NOT use headings (#, ##), bullet lists, or any Markdown structure other than shown below.
+- Format EVERY flashcard EXACTLY like this example, with nothing else on those lines:
+
+**Q:** What is a binary semaphore?
+**A:** A low-level primitive that enforces mutual exclusion so only one process accesses a shared resource at a time.
+**Explain:** It works by having a process wait on the semaphore before entering the critical section and signal it when done.
+---
+
+- Repeat that exact 4-line block {num_cards} times total, separated by a line containing only "---".
+- Keep the answer and the explanation to 1-2 short sentences each.
 - Use simple, clear language suitable for a student.
 
 Context:
 {context}
 
-Return ONLY the flashcards in Markdown.
+Return ONLY the {num_cards} flashcards in the format above. No preamble, no closing remarks, no extra commentary.
 """)
 
 SUMMARY_PROMPT = ChatPromptTemplate.from_template("""
@@ -114,14 +130,20 @@ You are an educational glossary builder. Extract key terms from the context belo
 {topic_note}
 Instructions:
 - List exactly {num_terms} important terms, concepts, or names from the material.
-- Format as a Markdown table with columns: **Term** | **Definition**
-- Definitions must be one clear sentence each, based only on the context.
+- Output ONLY a Markdown table — no heading, no intro sentence, no text before or after it.
+- The table must have exactly two columns: Term | Definition
+- Definitions must be one clear, short sentence each, based only on the context.
 - Sort terms alphabetically.
+
+Example of the exact format expected (do not reuse this content):
+| Term | Definition |
+| --- | --- |
+| Binary Semaphore | A primitive that enforces mutual exclusion over a shared resource. |
 
 Context:
 {context}
 
-Return ONLY the glossary table in Markdown.
+Return ONLY the Markdown table (header row + separator row + {num_terms} data rows). No preamble, no closing remarks.
 """)
 
 COMPARE_PROMPT = ChatPromptTemplate.from_template("""
