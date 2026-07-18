@@ -1,0 +1,21 @@
+# Core LangChain stack
+langchain>=0.2,<0.4
+langchain-text-splitters>=0.2,<0.4
+langchain-huggingface>=0.0.3,<0.2
+langchain-community>=0.2,<0.4
+langchain-chroma>=0.1,<0.3
+
+# LLM & embedding backends
+transformers>=4.40,<5.0
+sentence-transformers>=2.7,<4.0
+torch>=2.2
+
+# Document loaders
+docx2txt>=0.8,<1.0
+unstructured[pdf]>=0.14,<0.20  
+pytesseract>=0.3.10           
+pillow>=10.0                
+pdf2image>=1.16                
+
+# Configuration
+python-dotenv>=1.0,<2.0
