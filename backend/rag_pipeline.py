@@ -196,45 +196,106 @@ TOOL_PROMPTS = {
 # a malformed response reach the user as raw markdown, we validate it here
 # and retry generation before giving up.
 
+# The local LLM occasionally ignores formatting instructions, or stops short
+# of the requested count. Rather than let a malformed/partial response reach
+# the user, we extract whichever individual items ARE well-formed from each
+# attempt, keep them, and only ask the model to fill in whatever's still
+# missing — instead of accepting a short batch as "good enough".
+
 _QUIZ_BLOCK_RE = re.compile(r"\n(?=\s*\d+[.)]\s)")
 _QUIZ_QUESTION_RE = re.compile(r"^\s*\d+[.)]\s*(.+?)(?:\n|$)", re.S)
 _QUIZ_ANSWER_RE = re.compile(r"Answer:\s*([A-D])", re.I)
 
 
-def _count_valid_quiz_questions(text: str) -> int:
-    cleaned = re.sub(r"^#{1,6}\s.*$", "", text, flags=re.M).replace("```", "")
+def _clean_llm_text(text: str) -> str:
+    return re.sub(r"^#{1,6}\s.*$", "", text, flags=re.M).replace("```", "")
+
+
+def _extract_quiz_blocks(text: str) -> list[str]:
+    """Return only the individual question blocks that are well-formed."""
+    cleaned = _clean_llm_text(text)
     blocks = _QUIZ_BLOCK_RE.split(cleaned)
-    valid = 0
+    valid = []
     for block in blocks:
         q_match = _QUIZ_QUESTION_RE.match(block)
-        if not q_match or not q_match.group(1).strip():
+        if not q_match or not q_match.group(1).strip() or len(q_match.group(1)) > 300:
             continue
-        options = 0
-        for letter in "ABCD":
-            if re.search(rf"^\s*\**{letter}[.)\]:]\**\s*\S", block, re.M | re.I):
-                options += 1
+        options = sum(
+            1 for letter in "ABCD"
+            if re.search(rf"^\s*\**{letter}[.)\]:]\**\s*\S", block, re.M | re.I)
+        )
         if options >= 2 and _QUIZ_ANSWER_RE.search(block):
-            valid += 1
+            valid.append(block.strip())
     return valid
 
 
-def _count_valid_flashcards(text: str) -> int:
-    return len(re.findall(r"\*\*Q:\*\*\s*.+", text))
+def _extract_flashcard_blocks(text: str) -> list[str]:
+    cleaned = _clean_llm_text(text)
+    starts = [m.start() for m in re.finditer(r"\*\*Q:\*\*", cleaned)]
+    blocks = []
+    for i, start in enumerate(starts):
+        end = starts[i + 1] if i + 1 < len(starts) else len(cleaned)
+        chunk = cleaned[start:end]
+        q_match = re.search(r"\*\*Q:\*\*\s*(.+?)(?:\n|$)", chunk)
+        a_match = re.search(
+            r"\*\*A:\*\*\s*(.+?)(?=\n\s*\*\*Explain:\*\*|\n\s*-{3,}|$)", chunk, re.S
+        )
+        if q_match and a_match and len(q_match.group(1)) <= 300 and len(a_match.group(1)) <= 500:
+            blocks.append(chunk.strip().rstrip("-").strip())
+    return blocks
 
 
-def _count_valid_glossary_rows(text: str) -> int:
-    rows = [
-        line.strip() for line in text.splitlines()
-        if line.strip().startswith("|") and not re.match(r"^\|?\s*:?-{2,}", line.strip())
-    ]
-    return max(0, len(rows) - 1)  # subtract header row
+def _extract_glossary_rows(text: str) -> list[str]:
+    rows = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line.startswith("|") or re.match(r"^\|?\s*:?-{2,}", line):
+            continue
+        cells = [c.strip() for c in line.split("|") if c.strip()]
+        if len(cells) < 2:
+            continue
+        term, definition = cells[0], " — ".join(cells[1:])
+        if term.lower() == "term" or definition.lower() == "definition":
+            continue
+        if len(term) > 120 or len(definition) > 400:
+            continue
+        rows.append(f"| {term} | {definition} |")
+    return rows
 
 
-_TOOL_VALIDATORS = {
-    "quiz": _count_valid_quiz_questions,
-    "flashcards": _count_valid_flashcards,
-    "glossary": _count_valid_glossary_rows,
+_EXTRACTORS = {
+    "quiz": _extract_quiz_blocks,
+    "flashcards": _extract_flashcard_blocks,
+    "glossary": _extract_glossary_rows,
 }
+
+
+def _dedup_key(tool: str, block: str) -> str:
+    if tool == "quiz":
+        m = _QUIZ_QUESTION_RE.match(block)
+        return m.group(1).strip().lower()[:60] if m else block[:60].lower()
+    if tool == "flashcards":
+        m = re.search(r"\*\*Q:\*\*\s*(.+?)(?:\n|$)", block)
+        return m.group(1).strip().lower()[:60] if m else block[:60].lower()
+    if tool == "glossary":
+        cells = [c.strip() for c in block.split("|") if c.strip()]
+        return cells[0].lower() if cells else block[:60].lower()
+    return block[:60].lower()
+
+
+def _assemble(tool: str, blocks: list[str]) -> str:
+    if tool == "quiz":
+        renumbered = []
+        for i, block in enumerate(blocks, 1):
+            body = re.sub(r"^\s*\d+[.)]\s*", "", block, count=1)
+            renumbered.append(f"{i}. {body}")
+        return "\n\n".join(renumbered)
+    if tool == "flashcards":
+        return "\n---\n".join(blocks) + "\n---"
+    if tool == "glossary":
+        return "| Term | Definition |\n| --- | --- |\n" + "\n".join(blocks)
+    return "\n\n".join(blocks)
+
 
 _RETRY_NOTE = (
     "\n\nIMPORTANT: Your previous attempt did not follow the required format "
@@ -242,41 +303,67 @@ _RETRY_NOTE = (
     "time — plain text only, no headings, no bullet symbols, no code fences.\n"
 )
 
-MAX_GENERATION_ATTEMPTS = 3
+MAX_GENERATION_ATTEMPTS = 4
 
 
-def _invoke_with_retry(chain, inputs: dict, tool: str, expected_count: int):
-    """Invoke the generation chain, retrying if the output doesn't parse into
-    the expected number of structured items. Returns the best attempt seen."""
-    validator = _TOOL_VALIDATORS.get(tool)
-    best_text, best_count = "", -1
+def _invoke_with_backfill(chain, inputs: dict, tool: str, expected_count: int):
+    """Invoke the generation chain, keeping only well-formed items across
+    attempts and asking for just the shortfall each time, until the full
+    requested count is reached (or attempts run out)."""
+    extractor = _EXTRACTORS.get(tool)
+    if extractor is None:
+        return chain.invoke(inputs, config={"callbacks": []})  # e.g. summary/compare
+
+    collected: list[str] = []
+    seen_keys: set[str] = set()
 
     for attempt in range(1, MAX_GENERATION_ATTEMPTS + 1):
-        text = chain.invoke(inputs, config={"callbacks": []})
-        if validator is None:
-            return text  # tool has no structured format to validate (e.g. summary)
+        remaining = expected_count - len(collected)
+        call_inputs = {
+            **inputs,
+            "num_questions": remaining,
+            "num_cards": remaining,
+            "num_terms": remaining,
+        }
+        text = chain.invoke(call_inputs, config={"callbacks": []})
 
-        found = validator(text)
-        if found > best_count:
-            best_text, best_count = text, found
+        for block in extractor(text):
+            if len(collected) >= expected_count:
+                break
+            key = _dedup_key(tool, block)
+            if key in seen_keys:
+                continue  # model repeated an earlier item — skip it
+            seen_keys.add(key)
+            collected.append(block)
 
-        if found >= expected_count:
-            return text
+        if len(collected) >= expected_count:
+            break
 
         logger.warning(
-            "generate_tool(%s) attempt %d/%d produced %d/%d parseable items, retrying",
-            tool, attempt, MAX_GENERATION_ATTEMPTS, found, expected_count,
+            "generate_tool(%s) attempt %d/%d: have %d/%d well-formed items, "
+            "asking for %d more",
+            tool, attempt, MAX_GENERATION_ATTEMPTS, len(collected),
+            expected_count, expected_count - len(collected),
         )
-        # Reinforce the format requirement on the next attempt.
-        inputs = {**inputs, "topic_note": inputs.get("topic_note", "") + _RETRY_NOTE}
+        note = _RETRY_NOTE
+        if collected:
+            already = "; ".join(_dedup_key(tool, b) for b in collected)
+            note += f"Do not repeat any of these already-used items: {already}\n"
+        inputs = {**inputs, "topic_note": inputs.get("topic_note", "") + note}
 
-    if best_count <= 0:
+    if not collected:
         raise ValueError(
             f"The model couldn't produce a well-formatted {tool} after "
             f"{MAX_GENERATION_ATTEMPTS} attempts. Try again, or use a smaller "
             f"item count."
         )
-    return best_text
+    if len(collected) < expected_count:
+        logger.warning(
+            "generate_tool(%s) returning %d/%d items after %d attempts — "
+            "model couldn't reach the full count",
+            tool, len(collected), expected_count, MAX_GENERATION_ATTEMPTS,
+        )
+    return _assemble(tool, collected)
 
 
 def get_or_create_store(persist_dir: str, embedding_model) -> Chroma:
@@ -520,7 +607,6 @@ def generate_tool(tool: str, filepath, topic: str | None = None, count: int | No
         embedding_model = get_embedding_model(settings.embedding_model)
         store = get_or_create_store(settings.chroma_persist_dir, embedding_model)
         chat_model = get_chat_model(settings.llm_model)
-
         query_text = topic if topic else "key concepts, definitions, and main topics"
         # Pull more context chunks when a larger item count is requested so the
         # model has enough distinct material to draw from.
@@ -549,7 +635,7 @@ def generate_tool(tool: str, filepath, topic: str | None = None, count: int | No
             "num_cards": n,
             "num_terms": n,
         }
-        return _invoke_with_retry(chain, inputs, tool, expected_count=n)
+        return _invoke_with_backfill(chain, inputs, tool, expected_count=n)
     except Exception:
         logger.exception(
             "generate_tool failed (tool=%r, filepaths=%r, topic=%r, count=%r)",
