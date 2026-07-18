@@ -19,7 +19,7 @@
 10. [Supported File Formats](#10-supported-file-formats)
 11. [Study Tools](#11-study-tools)
 12. [Performance Characteristics](#12-performance-characteristics)
-13. [Extending SIRIUS](#13-extending-sirius)
+13. [Extending LUMINA](#13-extending-LUMINA)
 
 ---
 
@@ -42,7 +42,7 @@ LUMINA is a **zero-cloud, zero-API-key** educational assistant. It runs entirely
 ## 2. Key Features
 
 - **Document Upload** — PDF, DOCX, PPTX, TXT, and Markdown files
-- **Website Ingestion** — Paste any public URL; SIRIUS fetches and indexes the page text
+- **Website Ingestion** — Paste any public URL; LUMINA fetches and indexes the page text
 - **RAG Chat** — Ask natural-language questions answered from *your* source only
 - **Quiz Generator** — Auto-generates 5 multiple-choice questions with answers
 - **Flashcard Generator** — Produces 8–10 Q&A flashcards from key concepts
@@ -96,26 +96,20 @@ loader.py     service.py       store.py         service.py
 ## 4. Directory Structure
 
 ```
-LUMINA/
+LUMINA-/
 |
 +-- app.py                   # Entry point: HTTP server, API handlers, SSRF guard
 |
 +-- backend/                 # All AI/RAG logic; pure Python, no web framework
 |   +-- config.py            # Centralised settings via .env
 |   +-- document_loader.py   # File -> LangChain Document chunks
-|   +-- embedding_service.py # HuggingFace embedding model (lru_cache)
-|   +-- chroma_store.py      # ChromaDB singleton + dedup-aware add_documents
-|   +-- retriever_service.py # MMR retriever factory
-|   +-- llm_service.py       # HuggingFace chat model (lru_cache)
-|   +-- rag_pipeline.py      # Public API: index_document, query, generate_tool
+|   +-- models.py            # HuggingFace embedding and chat model loaders
+|   +-- rag_pipeline.py      # Orchestrates indexing, retrieval, prompts, and tools
 |
 +-- web/                     # Static frontend served directly by LuminaHandler
 |   +-- index.html           # Single-page app shell
 |   +-- app.js               # All frontend logic (no framework)
-|   +-- style.css            # Landing / home page styles
-|   +-- workspace.css        # Workspace layout (3-column)
-|   +-- chat.css             # Chat bubble & message styles
-|   +-- features.css         # Feature cards / study tool modal styles
+|   +-- app.css              # All frontend styles
 |
 +-- uploads/                 # Runtime: uploaded files land here (git-ignored)
 +-- chroma.db/               # Runtime: persisted vector embeddings (git-ignored)
@@ -211,68 +205,38 @@ This keeps paragraphs together before falling back to sentence boundaries and fi
 
 ---
 
-### 5.4 `backend/embedding_service.py` — Embeddings
+### 5.4 `backend/models.py` — Embeddings & Local LLM
 
 ```python
 @lru_cache(maxsize=4)
 def get_embedding_model(model_name: str) -> HuggingFaceEmbeddings:
 ```
 
-Loads any HuggingFace sentence-transformer model by ID. `lru_cache` ensures the model is loaded **once per process** regardless of how many requests arrive. Supports up to 4 different models in cache simultaneously.
-
----
-
-### 5.5 `backend/chroma_store.py` — Vector Store
-
-A **thread-safe singleton** wrapping ChromaDB using a `threading.Lock`. Creates the `PersistentClient` and `Chroma` collection (`lumina_sources`) on first call, returns the cached instance thereafter.
-
-**Deduplication in `add_documents()`:**
-
-```python
-existing = store.get(where={"source": source_id}, include=[])
-if existing.get("ids"):
-    return False   # already indexed — skip
-```
-
-This prevents the vector store from growing unboundedly when the same document is re-queried.
-
----
-
-### 5.6 `backend/retriever_service.py` — MMR Retrieval
-
-Factory function `get_retriever()` configures **Maximum Marginal Relevance (MMR)** search:
-
-- MMR balances *relevance* (closeness to the query embedding) against *diversity* (avoiding near-duplicate chunks).
-- `fetch_k = max(k * 4, 20)` — fetches a larger candidate pool before re-ranking.
-- Supports an optional `source_filter` restricting retrieval to chunks from a single file.
-
----
-
-### 5.7 `backend/llm_service.py` — Local LLM
+Loads any HuggingFace sentence-transformer model by ID. `lru_cache` ensures the embedding model is loaded **once per process** and reused across requests.
 
 ```python
 @lru_cache(maxsize=2)
 def get_chat_model(model_id: str) -> ChatHuggingFace:
 ```
 
-Uses `HuggingFacePipeline.from_model_id()` to load any model from HuggingFace Hub locally. Fixed to `task="text-generation"` with `return_full_text=False` and `max_new_tokens=1024`. Wrapped in `ChatHuggingFace` for a LangChain-compatible chat interface.
+Loads a HuggingFace text-generation pipeline and wraps it in `ChatHuggingFace`. The pipeline uses `return_full_text=False`, `max_new_tokens=1536`, and a moderate temperature setting so the model stays coherent while respecting format instructions.
 
 ---
 
-### 5.8 `backend/rag_pipeline.py` — Orchestration
+### 5.5 `backend/rag_pipeline.py` — Orchestration, Storage & Tools
 
-The public surface of the backend — three exported functions:
+This module coordinates the whole RAG stack:
 
-| Function | Signature | Purpose |
-|---|---|---|
-| `index_document` | `(filepath: str) -> None` | Loads, splits, embeds, and stores document chunks |
-| `query` | `(question: str, filepath: str) -> str` | Answers a question using RAG |
-| `generate_tool` | `(tool: str, filepath: str) -> str` | Generates quiz / flashcards / summary |
+- `index_document()` loads and splits a file, creates embeddings, and stores chunks in ChromaDB.
+- `query()` retrieves relevant chunks, builds a context prompt, and asks the chat model for an answer.
+- `generate_tool()` retrieves broader context and generates quizzes, flashcards, summaries, glossary tables, or comparisons.
 
-**Prompt design** — all prompts instruct the model to:
-- Return valid Markdown only
-- Never invent information outside the provided context
-- Reply `"I don't know based on the provided documents."` if the answer is absent
+The file also contains the Chroma store singleton (`get_or_create_store()`), deduplicated indexing (`add_documents()`), retrieval logic (`_retrieve()`), prompt templates, and post-processing for tool outputs.
+
+**Request flow:**
+- `app.py` accepts uploads, website URLs, chat questions, and tool generation requests.
+- `rag_pipeline.py` ensures the source is indexed and uses the stored embeddings to answer or generate tool content.
+- The frontend receives Markdown responses and renders them in the chat workspace.
 
 ---
 
@@ -320,10 +284,7 @@ The frontend is a **single-page application** with no build pipeline — just st
 
 | File | Scope |
 |---|---|
-| `style.css` | Root variables, reset, landing page home view |
-| `workspace.css` | Three-column workspace shell, header, sidebar |
-| `chat.css` | Message bubbles, composer textarea, typing indicators |
-| `features.css` | Feature cards (home page), study tool modal |
+| `app.css` | All frontend styling for landing page, workspace, chat, and modals |
 
 ---
 
@@ -417,7 +378,7 @@ PORT=8000
 | Empty request bodies | `Content-Length <= 0` raises `ValueError` before JSON parse |
 | Unauthorized API paths | Only four POST paths in `_ALLOWED_PATHS`; all others get 404 |
 
-> SIRIUS is designed for **local, single-user use**. It binds to `127.0.0.1` only and is not reachable from the network by default.
+> LUMINA is designed for **local, single-user use**. It binds to `127.0.0.1` only and is not reachable from the network by default.
 
 ---
 
@@ -425,7 +386,7 @@ PORT=8000
 
 | Format | Extension(s) | Loader |
 |---|---|---|
-| PDF | `.pdf` | `UnstructuredPDFLoader` (with OCR via Tesseract) |
+| PDF | `.pdf` | `PyPDFLoader` |
 | Word Document | `.docx`, `.doc` | `Docx2txtLoader` |
 | PowerPoint | `.pptx`, `.ppt` | `UnstructuredPowerPointLoader` |
 | Plain Text | `.txt` | `TextLoader` |
@@ -460,7 +421,7 @@ HuggingFace models are cached in `~/.cache/huggingface/` after the first downloa
 
 ---
 
-## 13. Extending SIRIUS
+## 13. Extending LUMINA
 
 ### Swap the LLM
 Change `LLM_MODEL` in `.env` to any HuggingFace `text-generation` model. No code changes required.
@@ -481,4 +442,4 @@ Change `EMBEDDING_MODEL` in `.env`. If you change the model after indexing, dele
 4. Add a button in `web/index.html` with `data-tool="your-tool"`
 
 ### Replace ChromaDB with FAISS
-Only `backend/chroma_store.py` needs to change — all other modules interact through the `add_documents` / `get_or_create_store` interface, keeping the rest of the codebase untouched.
+Only `backend/rag_pipeline.py` needs to change — it contains the Chroma store, retrieval, and indexing logic. The rest of the code interacts through the same high-level functions, so no other modules need provider-specific edits.
