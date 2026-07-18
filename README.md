@@ -10,7 +10,7 @@
 
 ```powershell
 git clone <repo-url>
-cd SIRIUS-
+cd LUMINA-
 python -m venv venv
 ```
 
@@ -55,7 +55,7 @@ Open **http://127.0.0.1:8000** in your browser.
 | Feature | Description |
 |---|---|
 | **Document Chat** | Upload PDF, DOCX, PPTX, TXT, or Markdown — then ask questions |
-| **Website Chat** | Paste any public URL — SIRIUS indexes the page text |
+| **Website Chat** | Paste any public URL — LUMINA indexes the page text |
 | **Quiz** | Auto-generates 5 multiple-choice questions from your source |
 | **Flashcards** | Creates 8–10 Q&A flashcard pairs covering key concepts |
 | **Summary** | Produces a structured Markdown summary with a Key Takeaways section |
@@ -78,23 +78,17 @@ Open **http://127.0.0.1:8000** in your browser.
 ## Project Structure
 
 ```
-LUMINA/
+LUMINA-/
 ├── app.py                   # HTTP server + API (no external web framework)
 ├── backend/
-│   ├── config.py            # All settings loaded from .env
+│   ├── config.py            # Environment variable loader
 │   ├── document_loader.py   # File → text chunks (PDF, DOCX, PPTX, TXT, MD)
-│   ├── embedding_service.py # HuggingFace embedding model (cached per process)
-│   ├── chroma_store.py      # ChromaDB singleton with deduplication
-│   ├── retriever_service.py # MMR retriever factory
-│   ├── llm_service.py       # HuggingFace LLM (cached per process)
-│   └── rag_pipeline.py      # Public API: index_document(), query(), generate_tool()
+│   ├── models.py            # HuggingFace embedding and chat model loaders
+│   └── rag_pipeline.py      # Orchestration, vector store, retrieval, and tools
 ├── web/
 │   ├── index.html           # Single-page app shell
-│   ├── app.js               # All frontend logic
-│   ├── style.css            # Home / landing styles
-│   ├── workspace.css        # 3-column workspace layout
-│   ├── chat.css             # Chat message styles
-│   └── features.css         # Study tool modal styles
+│   ├── app.js               # Frontend application logic
+│   └── app.css              # All frontend styles
 ├── uploads/                 # Runtime: user files (git-ignored)
 ├── chroma.db/               # Runtime: vector embeddings (git-ignored)
 ├── requirements.txt
@@ -107,18 +101,17 @@ LUMINA/
 
 ## Architecture Overview
 
-SIRIUS uses a **Retrieval-Augmented Generation (RAG)** pipeline:
+LUMINA uses a **Retrieval-Augmented Generation (RAG)** pipeline:
 
 ```
 Browser  →  app.py (HTTP)  →  rag_pipeline.py
                                     |
-             ┌──────────────────────┼──────────────────────┐
-             ▼                      ▼                      ▼
-    document_loader.py    embedding_service.py     llm_service.py
-    (chunk the file)      (embed the chunks)       (generate answer)
+             ┌──────────────────────┼──────────────────────────────────┐
+             ▼                      ▼                                  ▼
+    document_loader.py       models.py                rag_pipeline.py
+    (load & split)    (embeddings + LLM loaders)   (indexing + retrieval + tools)
                                     |
-                             chroma_store.py
-                             (persist & retrieve)
+                      ChromaDB persistence + MMR search
 ```
 
 See [`ARCHITECTURE.md`](ARCHITECTURE.md) for a complete technical reference including all API endpoints, data flow diagrams, security design, and extension guides.
@@ -131,11 +124,8 @@ See [`ARCHITECTURE.md`](ARCHITECTURE.md) for a complete technical reference incl
 |---|---|---|
 | Config | `backend/config.py` | Centralised env-var settings (frozen dataclass) |
 | Loader | `backend/document_loader.py` | Read files off disk, split into chunks |
-| Embeddings | `backend/embedding_service.py` | Load & cache the HuggingFace embedding model |
-| Vector DB | `backend/chroma_store.py` | Open/reuse the Chroma store, dedup indexed sources |
-| Retriever | `backend/retriever_service.py` | Configure MMR retrieval strategy |
-| LLM | `backend/llm_service.py` | Load & cache the HuggingFace chat model |
-| RAG Pipeline | `backend/rag_pipeline.py` | Orchestrates everything; public API surface |
+| Models | `backend/models.py` | Load & cache HuggingFace embedding and chat models |
+| RAG Pipeline | `backend/rag_pipeline.py` | Orchestrates indexing, storage, retrieval, prompts, and study tools |
 
 To swap providers later (e.g. ChromaDB → FAISS, HuggingFace → Ollama), you only need to edit the one corresponding module — nothing else imports a provider SDK directly.
 
