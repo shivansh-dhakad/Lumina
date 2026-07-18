@@ -40,7 +40,7 @@ CHUNK_OVERLAP=150
 PORT=8000
 ```
 
-### 4. Run SIRIUS
+### 4. Run LUMINA
 
 ```powershell
 .\venv\Scripts\python.exe app.py
@@ -78,7 +78,7 @@ Open **http://127.0.0.1:8000** in your browser.
 ## Project Structure
 
 ```
-SIRIUS-/
+LUMINA/
 ├── app.py                   # HTTP server + API (no external web framework)
 ├── backend/
 │   ├── config.py            # All settings loaded from .env
@@ -158,7 +158,7 @@ To swap providers later (e.g. ChromaDB → FAISS, HuggingFace → Ollama), you o
 
 ## Security Notes
 
-- SIRIUS binds to `127.0.0.1` only — it is **not** accessible from other machines on your network.
+- LUMINA binds to `127.0.0.1` only — it is **not** accessible from other machines on your network.
 - Website fetching includes an **SSRF guard** that blocks requests to private, loopback, and reserved IP ranges.
 - Uploaded files are saved with a random UUID prefix; direct path traversal is prevented at the API layer.
 - File uploads are limited to **35 MB** and restricted to the allowlisted extensions above.
