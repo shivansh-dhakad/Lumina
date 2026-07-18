@@ -1,6 +1,7 @@
 import logging
 import os
 import os.path
+import re
 import threading
 from pathlib import Path
 
@@ -61,28 +62,37 @@ Write the full explanation now, in simple student-friendly language, as valid Ma
 QUIZ_PROMPT = ChatPromptTemplate.from_template("""
 You are an educational quiz generator. Create a quiz from the context below.
 {topic_note}
-Instructions:
-- Generate exactly {num_questions} multiple-choice questions (A, B, C, D).
-- Do NOT use headings (#, ##), bullet lists, or any Markdown structure other than shown below.
-- Format EVERY question EXACTLY like this example, with nothing else on those lines:
+STRICT OUTPUT FORMAT — follow this exactly, with no deviation:
+- Plain text only. NO markdown headings (#, ##, ###). NO code fences (```). NO bullet
+  characters (-, *, +). NO nested lists. NO bold/italic markers (**, _).
+- Every question has exactly 4 options, labelled "A." "B." "C." "D." on their own lines.
+- Every question ends with one "Answer: <letter>" line and one "Explanation: <text>" line.
+- Do not add any text before question 1 or after the final explanation.
+
+Here are two example questions in the required format (do not reuse this content):
 
 1. What does a binary semaphore enforce?
 A. Deadlock between processes
 B. Mutual exclusion over a shared resource
 C. Faster memory access
 D. Process priority
-
 Answer: B
 Explanation: A binary semaphore lets only one process access the critical section at a time, preventing race conditions.
 
-- Repeat that exact block {num_questions} times total, numbered 1., 2., 3., … in order.
-- Leave one blank line between questions.
-- Base every question, option, and explanation only on the context below.
+2. What is the purpose of a rotating daisy chain?
+A. To increase memory bandwidth
+B. To give the highest bus priority to the device nearest the controller
+C. To rotate priority to the device following the one that last held the bus
+D. To disable interrupts during I/O
+Answer: C
+Explanation: In a rotating daisy chain, the last device serviced passes priority to its neighbor, so priority rotates fairly instead of always favoring the same device.
+
+Now generate exactly {num_questions} NEW questions in this same format, numbered 1. through {num_questions}., one blank line between questions, based only on the context below.
 
 Context:
 {context}
 
-Return ONLY the quiz in the format above. No preamble, no closing remarks, no extra commentary.
+Return ONLY the {num_questions} questions in the exact format shown. No preamble, no closing remarks, no extra commentary.
 """)
 
 FLASHCARDS_PROMPT = ChatPromptTemplate.from_template("""
@@ -179,6 +189,94 @@ TOOL_PROMPTS = {
     "glossary": GLOSSARY_PROMPT,
     "compare": COMPARE_PROMPT,
 }
+
+
+# ── Server-side format validation (mirrors the parsers in web/app.js) ──────
+# The local LLM occasionally ignores formatting instructions. Rather than let
+# a malformed response reach the user as raw markdown, we validate it here
+# and retry generation before giving up.
+
+_QUIZ_BLOCK_RE = re.compile(r"\n(?=\s*\d+[.)]\s)")
+_QUIZ_QUESTION_RE = re.compile(r"^\s*\d+[.)]\s*(.+?)(?:\n|$)", re.S)
+_QUIZ_ANSWER_RE = re.compile(r"Answer:\s*([A-D])", re.I)
+
+
+def _count_valid_quiz_questions(text: str) -> int:
+    cleaned = re.sub(r"^#{1,6}\s.*$", "", text, flags=re.M).replace("```", "")
+    blocks = _QUIZ_BLOCK_RE.split(cleaned)
+    valid = 0
+    for block in blocks:
+        q_match = _QUIZ_QUESTION_RE.match(block)
+        if not q_match or not q_match.group(1).strip():
+            continue
+        options = 0
+        for letter in "ABCD":
+            if re.search(rf"^\s*\**{letter}[.)\]:]\**\s*\S", block, re.M | re.I):
+                options += 1
+        if options >= 2 and _QUIZ_ANSWER_RE.search(block):
+            valid += 1
+    return valid
+
+
+def _count_valid_flashcards(text: str) -> int:
+    return len(re.findall(r"\*\*Q:\*\*\s*.+", text))
+
+
+def _count_valid_glossary_rows(text: str) -> int:
+    rows = [
+        line.strip() for line in text.splitlines()
+        if line.strip().startswith("|") and not re.match(r"^\|?\s*:?-{2,}", line.strip())
+    ]
+    return max(0, len(rows) - 1)  # subtract header row
+
+
+_TOOL_VALIDATORS = {
+    "quiz": _count_valid_quiz_questions,
+    "flashcards": _count_valid_flashcards,
+    "glossary": _count_valid_glossary_rows,
+}
+
+_RETRY_NOTE = (
+    "\n\nIMPORTANT: Your previous attempt did not follow the required format "
+    "closely enough. Follow the format instructions and example EXACTLY this "
+    "time — plain text only, no headings, no bullet symbols, no code fences.\n"
+)
+
+MAX_GENERATION_ATTEMPTS = 3
+
+
+def _invoke_with_retry(chain, inputs: dict, tool: str, expected_count: int):
+    """Invoke the generation chain, retrying if the output doesn't parse into
+    the expected number of structured items. Returns the best attempt seen."""
+    validator = _TOOL_VALIDATORS.get(tool)
+    best_text, best_count = "", -1
+
+    for attempt in range(1, MAX_GENERATION_ATTEMPTS + 1):
+        text = chain.invoke(inputs, config={"callbacks": []})
+        if validator is None:
+            return text  # tool has no structured format to validate (e.g. summary)
+
+        found = validator(text)
+        if found > best_count:
+            best_text, best_count = text, found
+
+        if found >= expected_count:
+            return text
+
+        logger.warning(
+            "generate_tool(%s) attempt %d/%d produced %d/%d parseable items, retrying",
+            tool, attempt, MAX_GENERATION_ATTEMPTS, found, expected_count,
+        )
+        # Reinforce the format requirement on the next attempt.
+        inputs = {**inputs, "topic_note": inputs.get("topic_note", "") + _RETRY_NOTE}
+
+    if best_count <= 0:
+        raise ValueError(
+            f"The model couldn't produce a well-formatted {tool} after "
+            f"{MAX_GENERATION_ATTEMPTS} attempts. Try again, or use a smaller "
+            f"item count."
+        )
+    return best_text
 
 
 def get_or_create_store(persist_dir: str, embedding_model) -> Chroma:
@@ -444,16 +542,14 @@ def generate_tool(tool: str, filepath, topic: str | None = None, count: int | No
         )
         prompt = TOOL_PROMPTS[tool]
         chain = prompt | chat_model | StrOutputParser()
-        return chain.invoke(
-            {
-                "context": context,
-                "topic_note": topic_note,
-                "num_questions": n,
-                "num_cards": n,
-                "num_terms": n,
-            },
-            config={"callbacks": []},
-        )
+        inputs = {
+            "context": context,
+            "topic_note": topic_note,
+            "num_questions": n,
+            "num_cards": n,
+            "num_terms": n,
+        }
+        return _invoke_with_retry(chain, inputs, tool, expected_count=n)
     except Exception:
         logger.exception(
             "generate_tool failed (tool=%r, filepaths=%r, topic=%r, count=%r)",
