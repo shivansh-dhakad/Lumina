@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>Lumina — Local AI Learning Assistant</title>
+  <meta name="description" content="A fully local, private AI study assistant. Upload documents or websites and chat with an AI grounded in your source material.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,300..700,0..1,-50..200" rel="stylesheet">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<div class="app-shell">
+
+  <!-- ── Sidebar ──────────────────────────────────────────────────── -->
+  <aside class="sidebar">
+    <a class="brand" href="#"><span>✦</span>Lumina</a>
+
+    <button class="new-chat" id="newChat">
+      <span class="material-symbols-outlined">add</span>New chat
+    </button>
+
+    <div class="search">
+      <span class="material-symbols-outlined">search</span>
+      <input id="chatSearch" placeholder="Search chats" aria-label="Search chats">
+    </div>
+
+    <section class="recent">
+      <p class="eyebrow">RECENT CHATS</p>
+      <div id="chatList"><p class="empty-recent">No chats yet</p></div>
+    </section>
+
+    <footer>
+      <button type="button" class="theme-toggle" id="themeToggle" title="Toggle dark mode">
+        <span class="material-symbols-outlined">dark_mode</span>
+      </button>
+      <span class="material-symbols-outlined">lock</span> Stored locally
+    </footer>
+  </aside>
+
+  <!-- ── Home page ────────────────────────────────────────────────── -->
+  <main id="home">
+    <div class="home-content">
+      <p class="eyebrow blue">LUMINA LEARNING</p>
+      <h1>Start a conversation<br>with your sources.</h1>
+      <p>Create a chat, add a document or website, then learn through a private AI conversation grounded in that source.</p>
+      <button class="primary" id="startChat">
+        Create your first chat <span class="material-symbols-outlined">arrow_forward</span>
+      </button>
+    </div>
+  </main>
+
+  <!-- ── Workspace ────────────────────────────────────────────────── -->
+  <main class="workspace hidden" id="workspace">
+
+    <header class="workspace-header">
+      <div class="workspace-title-row">
+        <div>
+          <p class="eyebrow blue">CHAT</p>
+          <h1 id="workspaceTitle">New chat</h1>
+        </div>
+        <div class="workspace-actions">
+          <button type="button" class="icon-btn" id="clearChat" title="Clear messages">
+            <span class="material-symbols-outlined">delete_sweep</span>
+          </button>
+          <button type="button" class="icon-btn" id="renameChat" title="Rename chat">
+            <span class="material-symbols-outlined">edit</span>
+          </button>
+          <button type="button" class="icon-btn" id="exportChat" title="Export chat as Markdown">
+            <span class="material-symbols-outlined">download</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="tool-buttons">
+        <button data-tool="quiz">
+          <span class="material-symbols-outlined">quiz</span>Quiz
+        </button>
+        <button data-tool="flashcards">
+          <span class="material-symbols-outlined">style</span>Flashcards
+        </button>
+        <button data-tool="summary">
+          <span class="material-symbols-outlined">summarize</span>Summary
+        </button>
+        <button data-tool="glossary">
+          <span class="material-symbols-outlined">menu_book</span>Glossary
+        </button>
+        <button data-tool="compare" id="compareTool" class="hidden">
+          <span class="material-symbols-outlined">compare_arrows</span>Compare
+        </button>
+      </div>
+    </header>
+
+    <div class="workspace-columns">
+
+      <!-- Source Pane -->
+      <section class="source-pane">
+        <div class="pane-heading">
+          <div>
+            <span class="material-symbols-outlined">description</span>
+            <strong id="sourceName">Source</strong>
+          </div>
+          <div class="pane-actions">
+            <button id="addSource" class="icon-btn" title="Add another source to this chat">
+              <span class="material-symbols-outlined">add</span>
+            </button>
+            <span class="source-state">Indexed</span>
+          </div>
+        </div>
+        <div class="source-chips hidden" id="sourceChips"></div>
+        <div class="document-view" id="documentView">
+          <span class="material-symbols-outlined">description</span>
+          <h2>Your source is connected</h2>
+          <p>Document details and source preview appear here. Chat responses are grounded in this source.</p>
+        </div>
+      </section>
+
+      <!-- Chat Pane -->
+      <section class="chat-pane">
+        <div class="pane-heading">
+          <div>
+            <span class="material-symbols-outlined">auto_awesome</span>
+            <strong>Lumina</strong>
+          </div>
+          <span class="online">Ready</span>
+        </div>
+
+        <div class="messages" id="messages"></div>
+
+        <div class="suggestions hidden" id="suggestions"></div>
+
+        <div class="answer-modes" id="answerModes">
+          <button type="button" class="mode-chip active" data-mode="normal">Normal</button>
+          <button type="button" class="mode-chip" data-mode="simplify">Simplify</button>
+          <button type="button" class="mode-chip" data-mode="eli5">ELI5</button>
+          <button type="button" class="mode-chip" data-mode="exam">Exam prep</button>
+        </div>
+
+        <form class="composer" id="composer">
+          <textarea id="question" placeholder="Ask anything about this source…" rows="1"></textarea>
+          <button class="primary" aria-label="Send">
+            <span class="material-symbols-outlined">arrow_upward</span>
+          </button>
+        </form>
+      </section>
+
+    </div>
+  </main>
+</div>
+
+<!-- ── New Chat Modal ────────────────────────────────────────────── -->
+<div class="overlay" id="newChatModal">
+  <section class="dialog">
+    <button class="close" id="closeNewChat">×</button>
+    <p class="eyebrow blue">NEW CHAT</p>
+    <h2>Add a source to this chat</h2>
+    <p>Each chat keeps its own documents, websites, generated quizzes, and conversation.</p>
+
+    <div class="choices">
+      <button id="chooseFile">
+        <span class="material-symbols-outlined">upload_file</span>
+        <strong>Upload document</strong>
+        <small>PDF, DOCX, PPTX, TXT, Markdown</small>
+      </button>
+      <button id="chooseWebsite">
+        <span class="material-symbols-outlined">language</span>
+        <strong>Add website</strong>
+        <small>Use a webpage as a learning source</small>
+      </button>
+      <button id="choosePaste">
+        <span class="material-symbols-outlined">edit_note</span>
+        <strong>Paste notes</strong>
+        <small>Paste text directly as a source</small>
+      </button>
+    </div>
+
+    <input id="fileInput" type="file" hidden accept=".pdf,.docx,.pptx,.txt,.md">
+
+    <div class="website-entry hidden" id="websiteEntry">
+      <input id="websiteUrl" placeholder="https://example.com/article" type="url">
+      <button class="primary" id="addWebsite">Add website</button>
+    </div>
+
+    <div class="paste-entry hidden" id="pasteEntry">
+      <input id="pasteTitle" placeholder="Notes title (optional)" type="text">
+      <textarea id="pasteText" placeholder="Paste your notes, lecture transcript, or study text here…" rows="5"></textarea>
+      <button class="primary" id="addPaste">Add notes</button>
+    </div>
+  </section>
+</div>
+
+<!-- ── Loading Modal ─────────────────────────────────────────────── -->
+<div class="overlay" id="loadingModal">
+  <section class="dialog loading">
+    <span class="material-symbols-outlined">hub</span>
+    <p class="eyebrow blue">PREPARING CHAT</p>
+    <h2 id="loadingTitle">Uploading source</h2>
+    <p id="loadingMessage">Saving your document locally…</p>
+    <div class="progress"><i id="progressBar"></i></div>
+    <div class="progress-label">
+      <span id="progressStage">Starting</span>
+      <b id="progressPercent">0%</b>
+    </div>
+  </section>
+</div>
+
+<!-- ── Study Tool Modal ──────────────────────────────────────────── -->
+<div class="overlay" id="toolModal">
+  <section class="dialog">
+    <button class="close" id="closeTool">×</button>
+    <p class="eyebrow blue" id="toolEyebrow">STUDY TOOL</p>
+    <h2 id="toolTitle">Quiz</h2>
+    <div id="toolContent"></div>
+  </section>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/marked@11/marked.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
